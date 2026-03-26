@@ -2753,6 +2753,15 @@
       return state.trip.places.find((place) => doesPlaceMatchStep(place, step)) || null;
     }
 
+    function getLinkedPlaceForStep(step) {
+      if (!step) return null;
+      if (step.placeId) {
+        const exactPlace = state.trip.places.find((place) => place.id === step.placeId);
+        if (exactPlace) return exactPlace;
+      }
+      return findMatchingPlaceForStep(step);
+    }
+
     function getMapTimelineEntries(dayKey = getSelectedMapDay()) {
       const timeline = getTimelineContext();
       return getStepsForMapDay(dayKey).map((step) => {
@@ -4130,6 +4139,7 @@
     }
 
     function renderStepCard(step, index, total) {
+      const linkedPlace = getLinkedPlaceForStep(step);
       return `
         <article class="card step-card ${step.done ? "done" : ""}">
           <div class="step-top">
@@ -4143,6 +4153,7 @@
               </div>
               ${step.note ? `<p>${escapeHtml(step.note)}</p>` : ""}
               ${step.address ? `<p>${escapeHtml(step.address)}</p>` : ""}
+              ${linkedPlace ? `<p class="muted">Lieu lié : ${escapeHtml(linkedPlace.name)}</p>` : ""}
             </div>
           </div>
           <div class="action-row" style="margin-top:14px;">
@@ -4353,6 +4364,7 @@
                 ${place.personalNote ? `<p><strong>Note perso.</strong> ${escapeHtml(place.personalNote)}</p>` : ""}
                 <div class="action-row" style="margin-top:14px;">
                   <button class="action-btn primary" data-action="edit-place" data-id="${place.id}">Modifier</button>
+                  <button class="action-btn" data-action="assign-place-day" data-id="${place.id}">Attribuer a un jour</button>
                   <button class="action-btn" data-action="refresh-place" data-id="${place.id}">Enrichir auto</button>
                   <button class="action-btn" data-action="open-external" data-url="${escapeAttr(place.googleMapsUrl || buildGoogleMapsSearchUrl(place.address || place.name))}">Maps</button>
                   <button class="action-btn" ${place.wikiUrl ? `data-action="open-external" data-url="${escapeAttr(place.wikiUrl)}"` : "disabled"}>Wikipedia</button>
@@ -4500,7 +4512,7 @@
       const { type, payload } = state.ui.modal;
       const content = {
         "trip-settings": renderTripSettingsModal(),
-        "step-form": renderStepModal(payload.stepId),
+        "step-form": renderStepModal(payload.stepId, payload.placeId),
         "add-place": renderPlaceAddModal(),
         "edit-place": renderPlaceEditModal(payload.placeId),
         "document-form": renderDocumentModal(payload.documentId),
@@ -4648,7 +4660,7 @@
       `;
     }
 
-    function renderStepModal(stepId) {
+    function renderStepModal(stepId, initialPlaceId = null) {
       const suggested = getSuggestedStepDraft();
       const step = state.trip.steps.find((item) => item.id === stepId) || {
         id: uid(),
@@ -4668,6 +4680,8 @@
         done: false,
         placeId: null
       };
+      const initialPlace = initialPlaceId ? state.trip.places.find((item) => item.id === initialPlaceId) || null : null;
+      const linkedPlace = getLinkedPlaceForStep(step) || initialPlace;
 
       return `
         <div class="sheet-top">
@@ -4695,25 +4709,33 @@
                 ${["visite", "repas", "transport", "balade", "autre"].map((type) => `<option value="${type}" ${step.type === type ? "selected" : ""}>${type}</option>`).join("")}
               </select>
             </div>
+            <div class="field">
+              <label for="step-place-id">Lieu sauvegardé</label>
+              <select id="step-place-id" name="placeId">
+                <option value="">Aucun lieu lié</option>
+                ${state.trip.places.map((place) => `<option value="${place.id}" ${((step.placeId || initialPlaceId) === place.id || (!step.placeId && linkedPlace?.id === place.id)) ? "selected" : ""}>${escapeHtml(place.name)}${place.address ? ` · ${escapeHtml(place.address)}` : ""}</option>`).join("")}
+              </select>
+              <div class="field-hint" style="margin-top:8px;">Choisir un lieu peut préremplir automatiquement les champs utiles et l'ajouter a un jour via la date.</div>
+            </div>
           </div>
           <div class="field">
             <label for="step-title">Titre</label>
-            <input id="step-title" name="title" value="${escapeAttr(step.title || "")}" required />
+            <input id="step-title" name="title" value="${escapeAttr(step.title || linkedPlace?.name || "")}" required />
           </div>
           <div class="field">
             <label for="step-address">Adresse</label>
-            <input id="step-address" name="address" value="${escapeAttr(step.address || "")}" />
+            <input id="step-address" name="address" value="${escapeAttr(step.address || linkedPlace?.address || "")}" />
           </div>
           <div class="field-grid">
             ${isBudgetHidden() ? "" : `
               <div class="field">
                 <label for="step-cost">Coût</label>
-                <input id="step-cost" type="number" step="0.01" min="0" name="cost" value="${escapeAttr(step.cost || 0)}" />
+                <input id="step-cost" type="number" step="0.01" min="0" name="cost" value="${escapeAttr(step.cost || linkedPlace?.estimatedCost || 0)}" />
               </div>
             `}
             <div class="field">
               <label for="step-duration">Durée estimée</label>
-              <input id="step-duration" name="duration" value="${escapeAttr(formatDurationInputValue(step.duration))}" placeholder="Ex. 45 min, 1h30, 2h" inputmode="text" />
+              <input id="step-duration" name="duration" value="${escapeAttr(formatDurationInputValue(step.duration || linkedPlace?.recommendedDuration))}" placeholder="Ex. 45 min, 1h30, 2h" inputmode="text" />
               <div class="field-hint" style="margin-top:8px;">Saisie libre: 30 min, 1h, 1h30, 2h15...</div>
             </div>
           </div>
@@ -4723,19 +4745,19 @@
           </div>
           <div class="field">
             <label for="step-description">Description</label>
-            <textarea id="step-description" name="description">${escapeHtml(step.description || "")}</textarea>
+            <textarea id="step-description" name="description">${escapeHtml(step.description || linkedPlace?.shortDescription || "")}</textarea>
           </div>
           <div class="field">
             <label for="step-history">Histoire du lieu</label>
-            <textarea id="step-history" name="historyText">${escapeHtml(step.historyText || "")}</textarea>
+            <textarea id="step-history" name="historyText">${escapeHtml(step.historyText || linkedPlace?.historyText || "")}</textarea>
           </div>
           <div class="field">
             <label for="step-anecdote">Anecdote</label>
-            <textarea id="step-anecdote" name="anecdote">${escapeHtml(step.anecdote || "")}</textarea>
+            <textarea id="step-anecdote" name="anecdote">${escapeHtml(step.anecdote || linkedPlace?.anecdote || "")}</textarea>
           </div>
           <div class="field">
             <label for="step-tip">Conseil pratique</label>
-            <textarea id="step-tip" name="practicalTip">${escapeHtml(step.practicalTip || "")}</textarea>
+            <textarea id="step-tip" name="practicalTip">${escapeHtml(step.practicalTip || linkedPlace?.practicalTip || "")}</textarea>
           </div>
           <div class="action-row">
             <button class="action-btn primary" type="submit">Enregistrer</button>
@@ -4763,10 +4785,14 @@
         ${state.ui.placeSearchStatus ? `<div class="status-banner">${escapeHtml(state.ui.placeSearchStatus)}</div>` : ""}
         <div class="stack" id="place-search-results">
           ${state.ui.placeSearchResults.map((result, index) => `
-            <button class="place-result" data-action="select-search-result" data-index="${index}">
+            <div class="place-result">
               <strong>${escapeHtml(result.namedetails?.name || result.display_name?.split(",")[0] || "Lieu")}</strong>
               <div class="muted" style="margin-top:6px;">${escapeHtml(result.display_name || "")}</div>
-            </button>
+              <div class="action-row" style="margin-top:12px;">
+                <button class="action-btn primary" type="button" data-action="select-search-result-step" data-index="${index}">Ajouter a la timeline</button>
+                <button class="action-btn" type="button" data-action="select-search-result" data-index="${index}">Sauver le lieu</button>
+              </div>
+            </div>
           `).join("")}
         </div>
         <div class="list-divider"></div>
@@ -4992,6 +5018,12 @@
         stepForm.addEventListener("submit", onSubmitStepForm);
       }
 
+      const stepPlaceSelect = document.getElementById("step-place-id");
+      if (stepPlaceSelect && !stepPlaceSelect._boundChange) {
+        stepPlaceSelect._boundChange = true;
+        stepPlaceSelect.addEventListener("change", onStepPlaceChange);
+      }
+
       const tripSettingsForm = document.getElementById("trip-settings-form");
       if (tripSettingsForm) {
         tripSettingsForm.addEventListener("submit", onSubmitTripSettings);
@@ -5057,6 +5089,8 @@
       if (action === "set-theme") setTheme(target.dataset.theme);
       if (action === "add-step") openModal("step-form");
       if (action === "edit-step") openModal("step-form", { stepId: id });
+      if (action === "assign-place-day") openModal("step-form", { placeId: id });
+      if (action === "select-search-result-step") await selectSearchResultForStep(Number(target.dataset.index));
       if (action === "add-place") openModal("add-place");
       if (action === "edit-place") openModal("edit-place", { placeId: id });
       if (action === "add-document") openModal("document-form");
@@ -5142,8 +5176,10 @@
       event.preventDefault();
       const form = new FormData(event.currentTarget);
       const id = event.currentTarget.dataset.stepId || uid();
-      const address = String(form.get("address") || "");
-      const title = String(form.get("title") || "");
+      const placeId = String(form.get("placeId") || "").trim() || null;
+      const linkedPlace = placeId ? state.trip.places.find((item) => item.id === placeId) || null : null;
+      const address = String(form.get("address") || linkedPlace?.address || "");
+      const title = String(form.get("title") || linkedPlace?.name || "");
       const rawDate = String(form.get("date") || "").trim();
       const resolvedDate = rawDate || state.trip.meta.startDate || "";
       const resolvedDay = inferDayFromDate(resolvedDate) || "Jour";
@@ -5158,17 +5194,42 @@
         note: form.get("note"),
         cost: Number(form.get("cost") || 0),
         duration: parseDurationInput(form.get("duration")),
-        googleMapsUrl: buildGoogleMapsSearchUrl(address || title),
+        googleMapsUrl: buildGoogleMapsSearchUrl(address || title || linkedPlace?.address || linkedPlace?.name || ""),
         description: form.get("description"),
         historyText: form.get("historyText"),
         anecdote: form.get("anecdote"),
         practicalTip: form.get("practicalTip"),
         done: state.trip.steps.find((item) => item.id === id)?.done || false,
-        placeId: state.trip.steps.find((item) => item.id === id)?.placeId || null
+        placeId
       });
       closeModal();
       setFeedback("Étape enregistrée.", "success");
       renderApp();
+    }
+
+    function onStepPlaceChange(event) {
+      const placeId = String(event.target.value || "").trim();
+      const place = placeId ? state.trip.places.find((item) => item.id === placeId) || null : null;
+      if (!place) return;
+
+      const titleInput = document.getElementById("step-title");
+      const addressInput = document.getElementById("step-address");
+      const durationInput = document.getElementById("step-duration");
+      const costInput = document.getElementById("step-cost");
+      const descriptionInput = document.getElementById("step-description");
+      const historyInput = document.getElementById("step-history");
+      const anecdoteInput = document.getElementById("step-anecdote");
+      const tipInput = document.getElementById("step-tip");
+      const currentCost = costInput ? Number(costInput.value || 0) : NaN;
+
+      if (titleInput && !String(titleInput.value || "").trim()) titleInput.value = place.name || "";
+      if (addressInput && !String(addressInput.value || "").trim()) addressInput.value = place.address || "";
+      if (durationInput && !String(durationInput.value || "").trim() && place.recommendedDuration) durationInput.value = formatDurationInputValue(place.recommendedDuration);
+      if (costInput && (!String(costInput.value || "").trim() || currentCost === 0) && Number(place.estimatedCost || 0) > 0) costInput.value = String(place.estimatedCost);
+      if (descriptionInput && !String(descriptionInput.value || "").trim()) descriptionInput.value = place.shortDescription || "";
+      if (historyInput && !String(historyInput.value || "").trim()) historyInput.value = place.historyText || "";
+      if (anecdoteInput && !String(anecdoteInput.value || "").trim()) anecdoteInput.value = place.anecdote || "";
+      if (tipInput && !String(tipInput.value || "").trim()) tipInput.value = place.practicalTip || "";
     }
 
     async function onSubmitPlaceManualForm(event) {
@@ -5309,11 +5370,9 @@
       }
     }, SEARCH_DEBOUNCE_MS);
 
-    async function selectSearchResult(index) {
-      const selected = state.ui.placeSearchResults[index];
-      if (!selected) return;
-
-      const draft = {
+    function createPlaceDraftFromSearchResult(selected) {
+      if (!selected) return null;
+      return {
         id: uid(),
         name: selected.namedetails?.name || selected.display_name?.split(",")[0] || "Lieu",
         address: selected.display_name || "",
@@ -5334,7 +5393,9 @@
         sourceLang: "fr",
         sourceBadge: "Auto"
       };
+    }
 
+    async function enrichAndSavePlaceDraft(draft) {
       state.ui.selectedPlaceDraft = draft;
       state.ui.placeSearchStatus = "Enrichissement automatique du lieu...";
       renderApp();
@@ -5343,6 +5404,23 @@
         const enriched = await enrichPlaceAutomatically(draft);
         state.ui.selectedPlaceDraft = enriched;
         upsertPlace(enriched);
+        return enriched;
+      } catch (error) {
+        state.ui.selectedPlaceDraft = draft;
+        renderApp();
+        throw error;
+      }
+    }
+
+    async function selectSearchResult(index) {
+      const selected = state.ui.placeSearchResults[index];
+      if (!selected) return;
+
+      const draft = createPlaceDraftFromSearchResult(selected);
+      if (!draft) return;
+
+      try {
+        const enriched = await enrichAndSavePlaceDraft(draft);
         closeModal();
         const successMessage = {
           cache: "Lieu ajouté avec données déjà connues.",
@@ -5352,9 +5430,23 @@
         }[enriched.enrichmentStatus] || "Lieu ajouté.";
         setFeedback(successMessage, enriched.enrichmentStatus === "auto" || enriched.enrichmentStatus === "cache" ? "success" : "info");
       } catch (error) {
-        state.ui.selectedPlaceDraft = draft;
-        renderApp();
         setFeedback("Lieu non enrichi pour le moment à cause d'un problème de connexion ou de service externe. Vous pouvez compléter la fiche manuellement.", "error");
+      }
+    }
+
+    async function selectSearchResultForStep(index) {
+      const selected = state.ui.placeSearchResults[index];
+      if (!selected) return;
+
+      const draft = createPlaceDraftFromSearchResult(selected);
+      if (!draft) return;
+
+      try {
+        const enriched = await enrichAndSavePlaceDraft(draft);
+        openModal("step-form", { placeId: enriched.id });
+        setFeedback("Lieu trouve. Choisissez maintenant le jour et enregistrez l'etape.", "success");
+      } catch (error) {
+        setFeedback("Impossible de preparer ce lieu pour la timeline pour le moment. Vous pouvez toujours le sauvegarder manuellement.", "error");
       }
     }
 
