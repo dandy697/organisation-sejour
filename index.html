@@ -2917,6 +2917,30 @@
       });
     }
 
+    function getStepMapDiagnostic(step) {
+      const place = getLinkedPlaceForStep(step);
+      if (!place) {
+        return {
+          hasLinkedPlace: false,
+          label: "Carte : aucun lieu lié",
+          details: "Cette étape n'utilise pas encore de coordonnées sauvegardées."
+        };
+      }
+
+      const lat = Number(place.latitude);
+      const lon = Number(place.longitude);
+      const hasCoords = Number.isFinite(lat) && Number.isFinite(lon);
+
+      return {
+        hasLinkedPlace: true,
+        hasCoords,
+        label: `Carte : ${place.name || "Lieu lié"}`,
+        details: hasCoords
+          ? `${place.address || "Adresse non renseignée"} · ${place.latitude}, ${place.longitude}`
+          : `${place.address || "Adresse non renseignée"} · Coordonnées absentes`
+      };
+    }
+
     function getMapPlottedPoints(dayKey = getSelectedMapDay()) {
       return getMapTimelineEntries(dayKey)
         .filter((entry) => entry.hasCoords)
@@ -4339,6 +4363,7 @@
 
     function renderStepCard(step, index, total) {
       const linkedPlace = getLinkedPlaceForStep(step);
+      const diagnostic = getStepMapDiagnostic(step);
       return `
         <article class="card step-card ${step.done ? "done" : ""}">
           <div class="step-top">
@@ -4362,6 +4387,7 @@
               ${step.note ? `<p>${escapeHtml(step.note)}</p>` : ""}
               ${step.address ? `<p>${escapeHtml(step.address)}</p>` : ""}
               ${linkedPlace ? `<p class="muted">Lieu lié : ${escapeHtml(linkedPlace.name)}</p>` : ""}
+              <p class="muted" style="margin-top:8px;"><strong>${escapeHtml(diagnostic.label)}</strong><br>${escapeHtml(diagnostic.details)}</p>
             </div>
           </div>
           <div class="action-row" style="margin-top:14px;">
@@ -4457,15 +4483,6 @@
               </div>
             </div>
           </div>
-        </section>
-        <section class="section">
-          <div class="section-title">
-            <div>
-              <h3>Plan intégré</h3>
-              <p>${selectedDay === "all" ? "Une lecture visuelle plus élégante du parcours complet." : `Une lecture visuelle centrée sur ${escapeHtml(selectedDayLabel.toLowerCase())}.`}</p>
-            </div>
-          </div>
-          ${renderRouteMapCard(selectedDay)}
         </section>
         <section class="section">
           <div class="section-title">
