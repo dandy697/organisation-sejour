@@ -294,8 +294,6 @@
       box-shadow: var(--shadow);
       border: 1px solid var(--hero-border);
       margin-bottom: 18px;
-      content-visibility: auto;
-      contain-intrinsic-size: 1px 260px;
     }
 
     .hero::after {
@@ -376,8 +374,6 @@
 
     .section {
       margin-bottom: 18px;
-      content-visibility: auto;
-      contain-intrinsic-size: 1px 420px;
     }
 
     .section-title {
@@ -405,8 +401,6 @@
       border-radius: var(--radius-lg);
       padding: 15px;
       box-shadow: var(--shadow);
-      content-visibility: auto;
-      contain-intrinsic-size: 1px 260px;
     }
 
     .day-header {
@@ -1015,6 +1009,66 @@
       background: #fffdf8;
       border: 1px solid var(--line);
       cursor: pointer;
+    }
+
+    .place-media {
+      position: relative;
+      overflow: hidden;
+      margin: 0 0 14px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background:
+        radial-gradient(circle at top left, rgba(125, 211, 252, 0.35), transparent 45%),
+        linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(15, 23, 42, 0.04));
+      aspect-ratio: 16 / 9;
+    }
+
+    .place-media img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .place-media-fallback {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+
+    .step-thumb {
+      width: 84px;
+      min-width: 84px;
+      height: 84px;
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background:
+        radial-gradient(circle at top left, rgba(125, 211, 252, 0.3), transparent 45%),
+        linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(15, 23, 42, 0.04));
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+    }
+
+    .step-thumb img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+
+    @media (max-width: 640px) {
+      .step-thumb {
+        width: 68px;
+        min-width: 68px;
+        height: 68px;
+        border-radius: 16px;
+      }
     }
 
     .place-result:active {
@@ -2340,7 +2394,9 @@
         })),
         places: (trip.places || []).map((place) => ({
           ...place,
-          estimatedCost: 0
+          estimatedCost: 0,
+          imageUrl: "",
+          imageAlt: ""
         }))
       };
     }
@@ -2441,6 +2497,7 @@
         placeSearchStatus: "",
         isSearchingPlaces: false,
         isEnrichingPlace: false,
+        enrichingPlaceId: null,
         mapDayFilter: "all",
         feedback: null,
         importInputId: uid()
@@ -2453,7 +2510,8 @@
         weatherLoading: false,
         weatherKey: "",
         weatherRefreshTimer: null,
-        manifestUrl: ""
+        manifestUrl: "",
+        imageOptimizationPromise: null
       }
     };
 
@@ -2467,6 +2525,7 @@
 
     function resetTrip() {
       state.trip = cloneDefaultTrip();
+      syncPlacesFromSteps();
       hydrateDocumentsForCurrentTrip([]);
       saveTrip();
       setFeedback("Voyage réinitialisé avec les données de démonstration.", "success");
@@ -2533,10 +2592,12 @@
             places: Array.isArray(data.places) ? data.places : []
           };
           state.trip.meta.localId = state.trip.meta.localId || uid();
+          syncPlacesFromSteps();
           hydrateDocumentsForCurrentTrip(Array.isArray(data.documents) ? data.documents : []);
           saveTrip();
           setFeedback("Voyage importé avec succès.", "success");
           renderApp();
+          optimizeStoredPlaceImages();
         } catch (error) {
           setFeedback("Import impossible. Vérifiez le fichier JSON.", "error");
           renderApp();
@@ -2760,6 +2821,70 @@
         if (exactPlace) return exactPlace;
       }
       return findMatchingPlaceForStep(step);
+    }
+
+    function shouldAutoCreatePlaceFromStep(step) {
+      if (!step) return false;
+      const type = String(step.type || "").trim().toLowerCase();
+      if (type === "transport") return false;
+      const title = String(step.title || "").trim();
+      const address = String(step.address || "").trim();
+      if (title.length < 3 && address.length < 6) return false;
+      return true;
+    }
+
+    function createPlaceFromStep(step, existingPlaceId = "") {
+      const title = String(step.title || "").trim();
+      const address = String(step.address || "").trim();
+      return {
+        id: String(existingPlaceId || step.placeId || uid()),
+        name: title || address || "Lieu",
+        address,
+        latitude: "",
+        longitude: "",
+        type: String(step.type || "lieu").trim() || "lieu",
+        category: "timeline",
+        googleMapsUrl: buildGoogleMapsSearchUrl(address || title),
+        shortDescription: String(step.description || step.note || "").trim(),
+        imageUrl: "",
+        imageAlt: title || address || "Lieu",
+        historyText: String(step.historyText || "").trim(),
+        anecdote: String(step.anecdote || "").trim(),
+        practicalTip: String(step.practicalTip || "").trim(),
+        recommendedDuration: Number(step.duration || 0) || 60,
+        estimatedCost: Number(step.cost || 0) || 0,
+        personalNote: "",
+        wikiTitle: "",
+        wikiUrl: "",
+        sourceLang: "fr",
+        sourceBadge: "Timeline"
+      };
+    }
+
+    function ensurePlaceLinkedForStep(step) {
+      if (!shouldAutoCreatePlaceFromStep(step)) return step;
+
+      const exactLinkedPlace = step.placeId ? state.trip.places.find((place) => place.id === step.placeId) || null : null;
+      if (exactLinkedPlace) return step;
+
+      const matchedPlace = findMatchingPlaceForStep(step);
+      if (matchedPlace) {
+        return step.placeId === matchedPlace.id ? step : { ...step, placeId: matchedPlace.id };
+      }
+
+      const createdPlace = createPlaceFromStep(step);
+      state.trip.places.unshift(createdPlace);
+      return { ...step, placeId: createdPlace.id };
+    }
+
+    function syncPlacesFromSteps() {
+      let changed = false;
+      state.trip.steps = state.trip.steps.map((step) => {
+        const nextStep = ensurePlaceLinkedForStep(step);
+        if (nextStep !== step || nextStep.placeId !== step.placeId) changed = true;
+        return nextStep;
+      });
+      return changed;
     }
 
     function getMapTimelineEntries(dayKey = getSelectedMapDay()) {
@@ -3020,15 +3145,37 @@
       return data;
     }
 
-    async function searchWikipediaTitle(query) {
-      const normalized = normalizeCacheKey(`wiki-title-${query}`);
+    function simplifyPlaceName(value) {
+      return String(value || "")
+        .replace(/\s*\([^)]*\)\s*/g, " ")
+        .replace(/\s*[-–,:]\s*.*/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    function buildWikipediaQueries(place) {
+      const candidates = [
+        place.wikiTitle || "",
+        place.name || "",
+        simplifyPlaceName(place.name || ""),
+        `${simplifyPlaceName(place.name || "")} ${state.trip.meta.destination || ""}`.trim(),
+        `${place.name || ""} ${state.trip.meta.destination || ""}`.trim(),
+        `${simplifyPlaceName(place.name || "")} ${String(place.address || "").split(",")[0] || ""}`.trim()
+      ];
+
+      return Array.from(new Set(candidates.map((item) => String(item || "").trim()).filter(Boolean)));
+    }
+
+    async function searchWikipediaQuery(query, mode = "title") {
+      const normalized = normalizeCacheKey(`wiki-${mode}-${query}`);
       const cached = getCached("placeDetails", normalized);
       if (cached) return { ...cached.payload, source: "cache" };
 
       const languages = ["fr", "en"];
       for (const lang of languages) {
         try {
-          const url = `https://${lang}.wikipedia.org/w/rest.php/v1/search/title?q=${encodeURIComponent(query)}&limit=5`;
+          const endpoint = mode === "page" ? "page" : "title";
+          const url = `https://${lang}.wikipedia.org/w/rest.php/v1/search/${endpoint}?q=${encodeURIComponent(query)}&limit=5`;
           const response = await safeFetch(url, {});
           const data = await response.json();
           const pages = Array.isArray(data.pages) ? data.pages : [];
@@ -3041,13 +3188,27 @@
                 key: page.key || page.title
               }))
             };
-            setCached("placeDetails", normalized, result, `wiki-title-${lang}`);
+            setCached("placeDetails", normalized, result, `wiki-${mode}-${lang}`);
             return { ...result, source: "network" };
           }
         } catch (error) {
           continue;
         }
       }
+
+      return { lang: "fr", results: [], source: "none" };
+    }
+
+    async function searchWikipediaTitle(place) {
+      const queries = buildWikipediaQueries(place);
+      for (const query of queries) {
+        const byTitle = await searchWikipediaQuery(query, "title");
+        if (byTitle.results.length) return byTitle;
+
+        const byPage = await searchWikipediaQuery(query, "page");
+        if (byPage.results.length) return byPage;
+      }
+
       return { lang: "fr", results: [], source: "none" };
     }
 
@@ -3060,12 +3221,15 @@
         const restUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
         const response = await safeFetch(restUrl, {});
         const data = await response.json();
+        const imageSource = data.thumbnail?.source || data.originalimage?.source || "";
         const payload = {
           wikiTitle: data.title || title,
           wikiUrl: data.content_urls?.desktop?.page || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title)}`,
           shortDescription: data.description || "",
           historyText: data.extract || "",
-          sourceLang: lang
+          sourceLang: lang,
+          imageUrl: await optimizeRemoteImageDataUrl(imageSource),
+          imageAlt: data.title || title
         };
         setCached("wikiSummaries", normalized, payload, `wiki-summary-${lang}`);
         return { ...payload, source: "network" };
@@ -3075,12 +3239,15 @@
           const legacyUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
           const response = await safeFetch(legacyUrl, {});
           const data = await response.json();
+          const imageSource = data.thumbnail?.source || data.originalimage?.source || "";
           const payload = {
             wikiTitle: data.title || title,
             wikiUrl: data.content_urls?.desktop?.page || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title)}`,
             shortDescription: data.description || "",
             historyText: data.extract || "",
-            sourceLang: lang
+            sourceLang: lang,
+            imageUrl: await optimizeRemoteImageDataUrl(imageSource),
+            imageAlt: data.title || title
           };
           setCached("wikiSummaries", normalized, payload, `wiki-legacy-${lang}`);
           return { ...payload, source: "network" };
@@ -3102,7 +3269,7 @@
         };
       }
 
-      const search = await searchWikipediaTitle(`${place.name} ${place.address || ""}`.trim());
+      const search = await searchWikipediaTitle(place);
       const selected = search.results[0];
       if (!selected) {
         return {
@@ -3137,7 +3304,9 @@
         wikiUrl: enriched.wikiUrl,
         shortDescription: enriched.shortDescription,
         historyText: enriched.historyText,
-        sourceLang: enriched.sourceLang
+        sourceLang: enriched.sourceLang,
+        imageUrl: enriched.imageUrl || "",
+        imageAlt: enriched.imageAlt || enriched.name || ""
       }, "enriched-place");
       return enriched;
     }
@@ -3968,6 +4137,33 @@
       document.body.scrollTop = 0;
     }
 
+    function restoreScrollPosition(scrollY) {
+      const targetY = Math.max(0, Number(scrollY) || 0);
+      requestAnimationFrame(() => {
+        window.scrollTo({
+          top: targetY,
+          behavior: "auto"
+        });
+        document.documentElement.scrollTop = targetY;
+        document.body.scrollTop = targetY;
+      });
+    }
+
+    function restorePlaceCardIntoView(placeId, fallbackScrollY = null) {
+      requestAnimationFrame(() => {
+        const card = document.getElementById(`place-card-${String(placeId || "")}`);
+        if (card) {
+          card.scrollIntoView({
+            block: "center",
+            inline: "nearest",
+            behavior: "auto"
+          });
+          return;
+        }
+        if (fallbackScrollY != null) restoreScrollPosition(fallbackScrollY);
+      });
+    }
+
     function renderFab() {
       const labels = {
         planning: { label: "+ Etape", action: "add-step" },
@@ -4144,6 +4340,11 @@
         <article class="card step-card ${step.done ? "done" : ""}">
           <div class="step-top">
             <div class="time-badge">${escapeHtml(step.time || "--:--")}</div>
+            ${linkedPlace?.imageUrl ? `
+              <div class="step-thumb" aria-hidden="true">
+                <img src="${escapeAttr(linkedPlace.imageUrl)}" alt="${escapeAttr(linkedPlace.imageAlt || linkedPlace.name || "Lieu")}" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" />
+              </div>
+            ` : ""}
             <div class="step-main">
               <h4>${escapeHtml(step.title || "Etape sans titre")}</h4>
               <div class="badge-row" style="margin-top:8px;">
@@ -4321,6 +4522,22 @@
       }[place?.enrichmentStatus] || "Impossible de récupérer l'histoire du lieu. Vous pouvez compléter la fiche manuellement.");
     }
 
+    function renderPlaceMedia(place) {
+      if (place.imageUrl) {
+        return `
+          <div class="place-media">
+            <img src="${escapeAttr(place.imageUrl)}" alt="${escapeAttr(place.imageAlt || place.name || "Lieu")}" loading="auto" decoding="async" fetchpriority="auto" referrerpolicy="no-referrer" />
+          </div>
+        `;
+      }
+
+      return `
+        <div class="place-media" aria-hidden="true">
+          <div class="place-media-fallback">Aucune image récupérée automatiquement pour ce lieu.</div>
+        </div>
+      `;
+    }
+
     function renderPlaces() {
       return `
         <section class="hero">
@@ -4344,7 +4561,8 @@
           </div>
           <div class="stack">
             ${state.trip.places.length ? state.trip.places.map((place) => `
-              <article class="card">
+              <article class="card" id="place-card-${escapeAttr(place.id)}">
+                ${renderPlaceMedia(place)}
                 <div class="place-head">
                   <div class="place-copy">
                     <h4>${escapeHtml(place.name)}</h4>
@@ -4824,6 +5042,14 @@
             <textarea id="manual-description" name="shortDescription">${escapeHtml(draft?.shortDescription || "")}</textarea>
           </div>
           <div class="field">
+            <label for="manual-image">Image du lieu</label>
+            <input id="manual-image" name="imageUrl" value="${escapeAttr(draft?.imageUrl || "")}" placeholder="https://..." />
+            <div class="action-row" style="margin-top:8px;">
+              <button class="action-btn" type="button" data-action="clear-place-image" data-target="manual-image">Supprimer l'image</button>
+            </div>
+            <div class="field-hint" style="margin-top:8px;">Prérempli automatiquement si une image Wikipédia est trouvée.</div>
+          </div>
+          <div class="field">
             <label for="manual-history">Histoire du lieu</label>
             <textarea id="manual-history" name="historyText">${escapeHtml(draft?.historyText || "")}</textarea>
           </div>
@@ -4891,6 +5117,13 @@
           <div class="field">
             <label for="edit-place-description">Description courte</label>
             <textarea id="edit-place-description" name="shortDescription">${escapeHtml(place.shortDescription || "")}</textarea>
+          </div>
+          <div class="field">
+            <label for="edit-place-image">Image du lieu</label>
+            <input id="edit-place-image" name="imageUrl" value="${escapeAttr(place.imageUrl || "")}" placeholder="https://..." />
+            <div class="action-row" style="margin-top:8px;">
+              <button class="action-btn" type="button" data-action="clear-place-image" data-target="edit-place-image">Supprimer l'image</button>
+            </div>
           </div>
           <div class="field">
             <label for="edit-place-history">Histoire du lieu</label>
@@ -5005,6 +5238,100 @@
       });
     }
 
+    async function loadImageElementFromSource(source) {
+      return await new Promise((resolve, reject) => {
+        const image = new Image();
+        image.decoding = "async";
+        image.referrerPolicy = "no-referrer";
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("image-load-failed"));
+        image.src = source;
+      });
+    }
+
+    async function optimizeImageSourceToDataUrl(source, { maxWidth = 320, maxHeight = 320, quality = 0.6 } = {}) {
+      const input = String(source || "").trim();
+      if (!input) return "";
+
+      try {
+        const image = await loadImageElementFromSource(input);
+        const ratio = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight, 1);
+        const width = Math.max(1, Math.round(image.naturalWidth * ratio));
+        const height = Math.max(1, Math.round(image.naturalHeight * ratio));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d", { alpha: false });
+        if (!ctx) return input;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(image, 0, 0, width, height);
+
+        let output = canvas.toDataURL("image/jpeg", quality);
+        if (output.length > 120000) {
+          output = canvas.toDataURL("image/jpeg", 0.5);
+        }
+        return output;
+      } catch (error) {
+        return input;
+      }
+    }
+
+    async function optimizeRemoteImageDataUrl(url, { maxWidth = 320, maxHeight = 320, quality = 0.6 } = {}) {
+      const source = String(url || "").trim();
+      if (!source) return "";
+
+      try {
+        const response = await safeFetch(source, { headers: { Accept: "image/*,*/*;q=0.8" } }, 12000);
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        try {
+          return await optimizeImageSourceToDataUrl(objectUrl, { maxWidth, maxHeight, quality });
+        } finally {
+          URL.revokeObjectURL(objectUrl);
+        }
+      } catch (error) {
+        return source;
+      }
+    }
+
+    async function optimizeStoredPlaceImages() {
+      if (state.runtime.imageOptimizationPromise) return state.runtime.imageOptimizationPromise;
+
+      state.runtime.imageOptimizationPromise = (async () => {
+        let changed = false;
+        for (const place of state.trip.places) {
+          const imageUrl = String(place.imageUrl || "");
+          if (!imageUrl.startsWith("data:image/")) continue;
+          if (imageUrl.length <= 120000) continue;
+
+          const optimized = await optimizeImageSourceToDataUrl(imageUrl, {
+            maxWidth: 320,
+            maxHeight: 320,
+            quality: 0.5
+          });
+
+          if (optimized && optimized !== imageUrl) {
+            place.imageUrl = optimized;
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          saveTrip();
+          renderApp();
+        }
+      })();
+
+      try {
+        await state.runtime.imageOptimizationPromise;
+      } finally {
+        state.runtime.imageOptimizationPromise = null;
+      }
+    }
+
     function bindEvents() {
       document.querySelectorAll("[data-action]").forEach((element) => {
         const action = element.dataset.action;
@@ -5070,7 +5397,11 @@
     }
 
     async function handleAction(event) {
+      event.preventDefault();
       const target = event.currentTarget;
+      if (typeof target.blur === "function") {
+        target.blur();
+      }
       const action = target.dataset.action;
       const id = target.dataset.id;
       const url = target.dataset.url;
@@ -5114,6 +5445,14 @@
       if (action === "reset-trip" && confirm("Réinitialiser le voyage et remplacer vos modifications locales ?")) resetTrip();
       if (action === "refresh-place") await refreshPlace(id);
       if (action === "select-search-result") await selectSearchResult(Number(target.dataset.index));
+      if (action === "clear-place-image") {
+        const inputId = target.dataset.target;
+        const input = inputId ? document.getElementById(inputId) : null;
+        if (input) {
+          input.value = "";
+          input.focus({ preventScroll: true });
+        }
+      }
     }
 
     function toggleStepDone(id) {
@@ -5136,9 +5475,11 @@
     async function refreshPlace(id) {
       const place = state.trip.places.find((item) => item.id === id);
       if (!place) return;
+      const scrollY = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
       state.ui.isEnrichingPlace = true;
-      setFeedback("Enrichissement du lieu en cours...", "info");
+      state.ui.enrichingPlaceId = id;
       renderApp();
+      restorePlaceCardIntoView(id, scrollY);
       try {
         const enriched = await enrichPlaceAutomatically({ ...place });
         upsertPlace({
@@ -5151,7 +5492,9 @@
         setFeedback("Impossible de récupérer l'histoire du lieu. Vous pouvez compléter la fiche manuellement.", "error");
       } finally {
         state.ui.isEnrichingPlace = false;
+        state.ui.enrichingPlaceId = null;
         renderApp();
+        restorePlaceCardIntoView(id, scrollY);
       }
     }
 
@@ -5183,7 +5526,7 @@
       const rawDate = String(form.get("date") || "").trim();
       const resolvedDate = rawDate || state.trip.meta.startDate || "";
       const resolvedDay = inferDayFromDate(resolvedDate) || "Jour";
-      upsertStep({
+      const nextStep = ensurePlaceLinkedForStep({
         id,
         day: resolvedDay,
         date: resolvedDate,
@@ -5202,6 +5545,7 @@
         done: state.trip.steps.find((item) => item.id === id)?.done || false,
         placeId
       });
+      upsertStep(nextStep);
       closeModal();
       setFeedback("Étape enregistrée.", "success");
       renderApp();
@@ -5245,6 +5589,8 @@
         category: "",
         googleMapsUrl: buildGoogleMapsSearchUrl(String(form.get("address") || form.get("name") || "")),
         shortDescription: String(form.get("shortDescription") || "").trim(),
+        imageUrl: String(form.get("imageUrl") || "").trim(),
+        imageAlt: String(form.get("name") || "").trim(),
         historyText: String(form.get("historyText") || "").trim(),
         anecdote: "",
         practicalTip: "",
@@ -5279,6 +5625,8 @@
         recommendedDuration: parseDurationInput(form.get("recommendedDuration")),
         estimatedCost: Number(form.get("estimatedCost") || 0),
         shortDescription: form.get("shortDescription"),
+        imageUrl: String(form.get("imageUrl") || "").trim(),
+        imageAlt: String(form.get("name") || "").trim() || existing.imageAlt || existing.name || "",
         historyText: form.get("historyText"),
         anecdote: form.get("anecdote"),
         practicalTip: form.get("practicalTip"),
@@ -5382,6 +5730,8 @@
         category: selected.class || "",
         googleMapsUrl: buildGoogleMapsSearchUrl(selected.display_name || ""),
         shortDescription: "",
+        imageUrl: "",
+        imageAlt: selected.namedetails?.name || selected.display_name?.split(",")[0] || "Lieu",
         historyText: "",
         anecdote: "",
         practicalTip: "",
@@ -5589,7 +5939,12 @@
       return escapeHtml(str);
     }
 
+    if (syncPlacesFromSteps()) {
+      saveTrip();
+    }
+
     renderApp();
+    optimizeStoredPlaceImages();
     registerServiceWorker();
   </script>
 </body>
