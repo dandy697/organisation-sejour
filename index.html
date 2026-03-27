@@ -1044,7 +1044,6 @@
 
     .step-thumb {
       width: 84px;
-      min-width: 84px;
       height: 84px;
       overflow: hidden;
       border-radius: 18px;
@@ -1053,6 +1052,12 @@
         radial-gradient(circle at top left, rgba(125, 211, 252, 0.3), transparent 45%),
         linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(15, 23, 42, 0.04));
       box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+    }
+
+    .step-thumb-wrap {
+      display: flex;
+      justify-content: center;
+      margin-top: 10px;
     }
 
     .step-thumb img {
@@ -1065,7 +1070,6 @@
     @media (max-width: 640px) {
       .step-thumb {
         width: 68px;
-        min-width: 68px;
         height: 68px;
         border-radius: 16px;
       }
@@ -4318,7 +4322,6 @@
                 <div class="stack">
                   ${steps.map((step, index) => `
                     ${renderStepCard(step, index, steps.length)}
-                    ${index < steps.length - 1 ? renderStepTransition(step, steps[index + 1]) : ""}
                   `).join("")}
                 </div>
               </article>
@@ -4339,12 +4342,16 @@
       return `
         <article class="card step-card ${step.done ? "done" : ""}">
           <div class="step-top">
-            <div class="time-badge">${escapeHtml(step.time || "--:--")}</div>
-            ${linkedPlace?.imageUrl ? `
-              <div class="step-thumb" aria-hidden="true">
-                <img src="${escapeAttr(linkedPlace.imageUrl)}" alt="${escapeAttr(linkedPlace.imageAlt || linkedPlace.name || "Lieu")}" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" />
-              </div>
-            ` : ""}
+            <div>
+              <div class="time-badge">${escapeHtml(step.time || "--:--")}</div>
+              ${linkedPlace?.imageUrl ? `
+                <div class="step-thumb-wrap" aria-hidden="true">
+                  <div class="step-thumb">
+                    <img src="${escapeAttr(linkedPlace.imageUrl)}" alt="${escapeAttr(linkedPlace.imageAlt || linkedPlace.name || "Lieu")}" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" />
+                  </div>
+                </div>
+              ` : ""}
+            </div>
             <div class="step-main">
               <h4>${escapeHtml(step.title || "Etape sans titre")}</h4>
               <div class="badge-row" style="margin-top:8px;">
